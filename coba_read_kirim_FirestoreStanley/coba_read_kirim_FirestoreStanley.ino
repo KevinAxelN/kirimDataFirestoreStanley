@@ -268,7 +268,7 @@ int ultrasonic() {
 
   // Singkirkan nilai yang ekstrem
   for (int i = 0; i < numberOfReadings; i++) {
-    if (abs(readings[i] - averageDuration) > 500) {  // Sesuaikan ambang batas penyaringan sesuai kebutuhan
+    if (abs(readings[i] - averageDuration) > 300) {  // Sesuaikan ambang batas penyaringan sesuai kebutuhan
       Serial.print("dibuang: ");
       Serial.println(readings[i]);
       totalDuration -= readings[i];
