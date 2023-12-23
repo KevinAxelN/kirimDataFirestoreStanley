@@ -24,7 +24,7 @@ Preferences preferences;  //  preferences flash memory  //
 
 //  fish feeder device wifi  //
 const char* ssid = "FishFeeder";     
-const char* password = "12345678"; 
+const char* password = "P15HF3ED3rD3V1C3"; 
 const int serverPort = 80;       
 String deviceId = "sGghkYSKOULVLNVLaIY8";   //    DEVICE ID   //
 WiFiServer server(serverPort);
@@ -45,13 +45,21 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 bool taskCompleted = false;
+bool isPairing = false;
 
 unsigned long dataMillis = 0;
+
+// UNTUK KONEK WIFI
+String savedSSID = "";
+String savedPassword = "";
 
 //   saved feeding when offline
 String savedLastFeeding = "";
 int savedAfterFeedVol = 0;
 bool isFoodTankOffline = false;
+
+String* values = nullptr; // Deklarasikan values sebagai variabel global di luar loop
+int savedSize = 0; // Ukuran values yang disimpan sebelumnya
 
 //  send UID when set wifi and password for first time
 void updateDocumentUID(String UID) {
@@ -82,6 +90,26 @@ void onLED() {
       delay(100); 
     }  
     cooldownStartTime = currentTime;  // Reset waktu cooldown
+  }
+}
+
+void updateUltrasonicOnly(int afterFeed) {
+  //  Firebase send data update 
+  FirebaseJson content;
+  String documentPath = "Devices/" + deviceId;
+  Serial.println("Mencoba update a document... ");
+  content.clear();
+  content.set("fields/afterFeedVol/integerValue", afterFeed);
+  if (Firebase.Firestore.patchDocument(&fbdo, projectId, "" /* databaseId can be (default) or empty */, documentPath.c_str(), content.raw(), "afterFeedVol" /* updateMask */)) {
+    isFoodTankOffline = false;
+    Serial.printf("ok\n%s\n\n", fbdo.payload().c_str());
+  }
+  else {
+    // isFoodTankOffline = true;
+    Serial.println(fbdo.errorReason());
+
+    // savedAfterFeedVol = afterFeed;
+    // Serial.println(savedLastFeeding + "(DHHSS) After: " + savedAfterFeedVol);
   }
 }
 
@@ -124,8 +152,10 @@ void WifiClientServer() {
           Serial.println("BERHASIL SAVE FLASH MEMORY");
           preferences.end();
 
+          bool isPairing = false;
           if (client.println(deviceId) > 0) {
             Serial.println("Sent response to client: " + deviceId);
+            //dikasih waktu 5 detik untuk pertukaran data 
             delay(5000);
 
             // Disconnect from SoftAP
@@ -137,7 +167,7 @@ void WifiClientServer() {
 
             // Wait for connection
             int connectionAttempts = 0;
-            while (WiFi.status() != WL_CONNECTED && connectionAttempts < 5) {
+            while (WiFi.status() != WL_CONNECTED && connectionAttempts <= 5) {
               delay(1000);
               Serial.print(".");
               connectionAttempts++;
@@ -146,12 +176,38 @@ void WifiClientServer() {
             if (WiFi.status() == WL_CONNECTED) {
               // Successfully connected to the new Wi-Fi network
               Serial.println("Connected to new WiFi network");
-              updateDocumentUID(devUID);
+              // updateDocumentUID(devUID);
+              int nilaiUltrasonic = ultrasonic();
+              updateUltrasonicOnly(nilaiUltrasonic);
+
             } else {
               // Failed to connect to the new Wi-Fi network
               // Serial.println("Failed to connect to the new WiFi network");
               //  LED ON  //
-              onLED();
+              if (!isPairing) {
+                onLED();
+              }
+
+              // Nyalakan fitur clear memory & pairing jika gagal konek brrti salah wifi
+              WiFi.disconnect();
+              Serial.println("clearing preferences flash memory");
+              preferences.begin("my-app", false);
+              preferences.clear();
+              Serial.println("BERHASIL CLEAR FLASH MEMORY");
+              preferences.end();
+
+              // bersihkan array values yang disimpan ketika ingin pairing
+              delete[] values;
+
+              WiFi.softAP(ssid, password);
+              Serial.println();
+              Serial.print("ESP32 IP address: ");
+              Serial.println(WiFi.softAPIP());
+              server.begin();
+              Serial.println("Server started");
+
+              bool isPairing = true;
+              digitalWrite(LED, HIGH);
             }
           } else {
             Serial.println("Failed to send response to client");
@@ -167,6 +223,7 @@ void WifiClientServer() {
     digitalWrite(LED, LOW);
   }
 }
+
 
 //butuh nambah hari
 void updateDocumentUltrasonic(int afterFeed, String timeNow) {
@@ -193,27 +250,27 @@ void updateDocumentUltrasonic(int afterFeed, String timeNow) {
 
 //HAPUS kalo bisa pake getTime
 // add moth dan tanggal
-String getLocalTime() {
-  time_t now;
-  struct tm timeinfo;
-  char strftime_buf[64];
+// String getLocalTime() {
+//   time_t now;
+//   struct tm timeinfo;
+//   char strftime_buf[64];
 
-  delay(1000);
+//   delay(1000);
 
-  if(!getLocalTime(&timeinfo)){
-    Serial.println("Failed to obtain time");
-    return "Failed to obtain time";
-  }
-  time(&now);
+//   if(!getLocalTime(&timeinfo)){
+//     Serial.println("Failed to obtain time");
+//     return "Failed to obtain time";
+//   }
+//   time(&now);
 
-  int day = timeinfo.tm_wday == 0 ? 7 : timeinfo.tm_wday;
+//   int day = timeinfo.tm_wday == 0 ? 7 : timeinfo.tm_wday;
 
-  localtime_r(&now, &timeinfo);
-  strftime(strftime_buf, sizeof(strftime_buf), "%H%M", &timeinfo);  //  "%A, %d %B %Y at %H:%M"
-  String timeStr = strftime_buf;
-  String result = String(day) + String(timeStr);
-  return result;
-}
+//   localtime_r(&now, &timeinfo);
+//   strftime(strftime_buf, sizeof(strftime_buf), "%H%M", &timeinfo);  //  "%A, %d %B %Y at %H:%M"
+//   String timeStr = strftime_buf;
+//   String result = String(day) + String(timeStr);
+//   return result;
+// }
 
 String getTime() {
   time_t now;
@@ -222,10 +279,17 @@ String getTime() {
 
   delay(1000);
 
+  for (int i=0; i<15; i++) {
+    if(!getLocalTime(&timeinfo)){
+      Serial.println("Failed to obtain time");
+    }
+    delay(500);
+  }
   if(!getLocalTime(&timeinfo)){
     Serial.println("Failed to obtain time");
     return "Failed to obtain time";
   }
+
   time(&now);
 
   int day = timeinfo.tm_wday == 0 ? 7 : timeinfo.tm_wday;
@@ -325,7 +389,6 @@ void checkTimeAndUltrasonic(String currentTime, String values[], int arraySize) 
     String extractedTime = currentValue.substring(0, 4);  // Mengambil empat digit pertama sebagai waktu
 
     if (currentTime.equals(extractedTime)) {
-      delay(100);
       int afterFeed = ultrasonic();
       String timeNow = getTime();
 
@@ -353,7 +416,7 @@ void servo(int putaran) {
   Serial.print("Putaran : ");
   Serial.println(putaran);
   for (int i = 0; i < putaran; i++) {
-    myServo.write(10);             
+    myServo.write(7);             
     delay(300);                       
     myServo.write(0); 
     delay(300);                
@@ -374,17 +437,20 @@ void checkTimeAndRotateServo(String currentTime, String values[], int arraySize)
   }
 }
 
+bool jsonError = false;
 //untuk ambil isi array
 void parseJsonAndExtractValues(const char* json, String day, String*& values, int& size) {
   // Parse JSON
-  DynamicJsonDocument doc(2048);
+  DynamicJsonDocument doc(4096); 
   DeserializationError error = deserializeJson(doc, json);
   if (error) {
     Serial.print("deserializeJson() failed: ");
     Serial.println(error.c_str());
+    jsonError = true;
     return;
   }
 
+  jsonError = false;
   // Accessing the array and retrieving string values
   JsonArray array = doc["fields"][day]["arrayValue"]["values"];
   size = array.size();
@@ -504,36 +570,118 @@ String getToday() {
   return a;
 }
 
-void checkSavedWifi() {
-  if (WiFi.status() != WL_CONNECTED) {
-    preferences.begin("my-app", false);
-    // Membaca nilai yang tersimpan dengan kunci "wifi_ssid" dan "wifi_password" kalau ga ada jadi nilai default
+void checkSavedWifiFirst() {
+  preferences.begin("my-app", false);
+  // Membaca nilai yang tersimpan dengan kunci "wifi_ssid" dan "wifi_password" kalau ga ada jadi nilai default
 
-    if (preferences.isKey("wifi_ssid") && preferences.isKey("wifi_password")) {
-      String savedSSID = preferences.getString("wifi_ssid", "");
-      String savedPassword = preferences.getString("wifi_password", "");
-      preferences.end();
-      if (savedSSID.length() > 0 && savedPassword.length() > 0) {
-        Serial.println("SSID dan password sudah tersimpan:");
-        Serial.println("SSID: " + savedSSID);
-        Serial.println("Password: " + savedPassword);
+  if (preferences.isKey("wifi_ssid") && preferences.isKey("wifi_password")) {
+    savedSSID = preferences.getString("wifi_ssid", "");
+    savedPassword = preferences.getString("wifi_password", "");
+    preferences.end();
+    if (savedSSID.length() > 0 && savedPassword.length() > 0) {
+      Serial.println("SSID dan password sudah tersimpan:");
+      Serial.println("SSID: " + savedSSID);
+      Serial.println("Password: " + savedPassword);
 
-        WiFi.begin(savedSSID, savedPassword);
-        for (int i = 0; i < 5; i++) {
-          if (WiFi.status() != WL_CONNECTED) {
-            delay(1000);
-            Serial.print(".");
-          }
+
+
+      WiFi.begin(savedSSID, savedPassword);
+      for (int i = 0; i < 5; i++) {
+        if (WiFi.status() != WL_CONNECTED) {
+          delay(1000);
+          Serial.print(".");
         }
       }
-  
+      //  cek ultrasonic ketika wifi berhasil konek 
+      if (WiFi.status() == WL_CONNECTED) {
+        int nilaiUltrasonic = ultrasonic();
+        updateUltrasonicOnly(nilaiUltrasonic);
+      }
     } else {
-      // Serial.println("Belum ada SSID dan password yang tersimpan atau data kosong.");
+    // Serial.println("Belum ada SSID dan password yang tersimpan atau data kosong.");
+    //JIKA TIDAK ADA YG DI SAVE  ESP SBG WIFI BUAT START , supaya bisa konek wifi esp nya
+
+    // bersihkan array values yang disimpan ketika ingin pairing
+    delete[] values;
+
+    WiFi.softAP(ssid, password);
+    Serial.println();
+    Serial.print("ESP32 IP address: ");
+    Serial.println(WiFi.softAPIP());
+    server.begin();
+    Serial.println("Server started");
+
+    bool isPairing = true;
+    digitalWrite(LED, HIGH);
+  }
+
+  } else {
+    // Serial.println("Belum ada SSID dan password yang tersimpan atau data kosong.");
+    //JIKA TIDAK ADA YG DI SAVE  ESP SBG WIFI BUAT START , supaya bisa konek wifi esp nya
+    // bersihkan array values yang disimpan ketika ingin pairing
+    delete[] values;
+
+    WiFi.softAP(ssid, password);
+    Serial.println();
+    Serial.print("ESP32 IP address: ");
+    Serial.println(WiFi.softAPIP());
+    server.begin();
+    Serial.println("Server started");
+
+    bool isPairing = true;
+    digitalWrite(LED, HIGH);
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    // Serial.println("Failed to connect wifi");
+    //  LED ON  //
+    if (!isPairing) {
+      onLED();
     }
-    
-    if (WiFi.status() != WL_CONNECTED) {
-      // Serial.println("Failed to connect wifi");
-      //  LED ON  //
+  }
+}
+
+void checkSavedWifi() {
+  // Membaca nilai yang tersimpan dengan kunci "wifi_ssid" dan "wifi_password" kalau ga ada jadi nilai default
+  if (savedSSID.length() > 0 && savedPassword.length() > 0) {
+    Serial.println("SSID dan password sudah tersimpan:");
+    Serial.println("SSID: " + savedSSID);
+    Serial.println("Password: " + savedPassword);
+
+    WiFi.begin(savedSSID, savedPassword);
+    for (int i = 0; i < 5; i++) {
+      if (WiFi.status() != WL_CONNECTED) {
+        delay(1000);
+        Serial.print(".");
+      }
+    }
+    //  cek ultrasonic ketika wifi berhasil konek 
+    if (WiFi.status() == WL_CONNECTED) {
+      int nilaiUltrasonic = ultrasonic();
+      updateUltrasonicOnly(nilaiUltrasonic);
+    }
+  } else {
+    // Serial.println("Belum ada SSID dan password yang tersimpan atau data kosong.");
+    //JIKA TIDAK ADA YG DI SAVE  ESP SBG WIFI BUAT START , supaya bisa konek wifi esp nya
+
+    // bersihkan array values yang disimpan ketika ingin pairing
+    delete[] values;
+
+    WiFi.softAP(ssid, password);
+    Serial.println();
+    Serial.print("ESP32 IP address: ");
+    Serial.println(WiFi.softAPIP());
+    server.begin();
+    Serial.println("Server started");
+
+    bool isPairing = true;
+    digitalWrite(LED, HIGH);
+  }
+  
+  if (WiFi.status() != WL_CONNECTED) {
+    // Serial.println("Failed to connect wifi");
+    //  LED ON  //
+    if (!isPairing) {
       onLED();
     }
   }
@@ -545,12 +693,21 @@ void isButtonClicked() {
     //LED on ketika clear memory
     digitalWrite(LED, HIGH);
 
+    // kosongin WiFi saved
+    savedSSID = "";
+    savedPassword = "";
+
+    updateDocumentUID("");
+
     WiFi.disconnect();
     Serial.println("clearing preferences flash memory");
     preferences.begin("my-app", false);
     preferences.clear();
     Serial.println("BERHASIL CLEAR FLASH MEMORY");
     preferences.end();
+
+    // bersihkan array values yang disimpan ketika ingin pairing
+    delete[] values;
 
     //  ESP SBG WIFI BUAT START 
     WiFi.softAP(ssid, password);
@@ -562,6 +719,9 @@ void isButtonClicked() {
 
     //LED off ketika selesai clear
     digitalWrite(LED, LOW);
+
+    bool isPairing = true;
+    digitalWrite(LED, HIGH);
   } 
 }
 
@@ -612,79 +772,49 @@ void setup() {
 
   //   untuk timestamp today()  
   configTime(7 * 3600, 0, "pool.ntp.org");
+  checkSavedWifiFirst();
 }
 
 // ==================== LOOP  ==========================
-String* values = nullptr; // Deklarasikan values sebagai variabel global di luar loop
-int savedSize = 0; // Ukuran values yang disimpan sebelumnya
+
 
 // Untuk ultrasonic retry
 unsigned long previousMillis = 0;  // Variable untuk menyimpan waktu terakhir saat masuk ke dalam if statement
 const int interval = 10000; 
 
-void loop() {
+void loop() {  
   //Jika wifi ga konek
-  checkSavedWifi();
-
+  // if (WiFi.status() != WL_CONNECTED) {
+  //   checkSavedWifi();
+  // }
   //  jika buttonstate di click
   isButtonClicked();
 
   //  WIFI CLIENT SERVER START
   WifiClientServer();
 
+  String jam = getClock();
   if (WiFi.status() == WL_CONNECTED) {
+    
     //cek jika ultrasonic sbelumnya gagal read
     unsigned long currentMillis = millis();
     if (currentMillis - previousMillis >= interval) {
       previousMillis = currentMillis;
-      while (!Firebase.ready()) {
-        Firebase.ready();
-        Serial.print(".");
-      }
-      if (Firebase.ready()) {
-        if (ultrasonicRetry) {
-          String today = "";
-          today = getToday();
-          String documentPath = "Schedules/" + deviceId;
-          String mask = today;
-
-          if (Firebase.Firestore.getDocument(&fbdo, projectId, "", documentPath.c_str(), mask.c_str())) {
-            const char* c = fbdo.payload().c_str();
-            Serial.println("RETRY Get a document... ok");
-
-            String* retryValues;
-            int retrySize;
-            parseJsonAndExtractValues(c, today, retryValues, retrySize);
-
-            digitalWrite(LED, HIGH);  
-            delay(500);               
-            digitalWrite(LED, LOW);  
-            delay(100); 
-
-              myServo.write(3);             
-              delay(300);                       
-              myServo.write(0); 
-              delay(300);   
-
-            Serial.println("COBA ULTRASONIC RETRY");
-            int nilaiUltraRetry = ultrasonic();
-            String waktuTimeRetry = timeRetry;
-            if (!ultrasonicRetry) {
-              Serial.println("RETRY BERHASIL");
-              Serial.println("ultrasonic RETRY");
-              // updateDocumentUltrasonic(nilaiUltraRetry, waktuTimeRetry);
-              Serial.println(nilaiUltraRetry);
-              Serial.println("waktu RETRY");
-              Serial.println(waktuTimeRetry);
-            }
-         
-          }
+      if (ultrasonicRetry) {
+        Serial.println("COBA ULTRASONIC RETRY");
+        int nilaiUltraRetry = ultrasonic();
+        String waktuTimeRetry = timeRetry;
+        if (!ultrasonicRetry) {
+          Serial.println("RETRY BERHASIL");
+          Serial.println("ultrasonic RETRY");
+          // updateDocumentUltrasonic(nilaiUltraRetry, waktuTimeRetry);
+          Serial.println(nilaiUltraRetry);
+          Serial.println("waktu RETRY");
+          Serial.println(waktuTimeRetry);
         }
       }
-
     }
-
-    String jam = getClock();
+    
     while (!Firebase.ready()) {
       Firebase.ready();
       Serial.print(".");
@@ -720,9 +850,11 @@ void loop() {
         Serial.println(jam);
         // checkTimeAndRotateServo(jam, values, size);
 
-        delete[] values; // Hapus values yang disimpan sebelumnya
-        values = newValues; // Simpan values baru
-        savedSize = newSize; // Simpan ukuran values baru
+        if (!jsonError) {
+          delete[] values; // Hapus values yang disimpan sebelumnya
+          values = newValues; // Simpan values baru
+          savedSize = newSize; // Simpan ukuran values baru
+        }
 
         Serial.println("Wifi NYALA");
 
@@ -744,6 +876,7 @@ void loop() {
         // int beforeFeed = ultrasonic();
         checkTimeAndRotateServo(jam, values, savedSize);
         checkTimeAndUltrasonic(jam, values, savedSize);
+        
       } else {
         Serial.println(fbdo.errorReason());
 
@@ -759,11 +892,42 @@ void loop() {
         // int beforeFeed = ultrasonic();
         checkTimeAndRotateServo(jam, values, savedSize);
         checkTimeAndUltrasonic(jam, values, savedSize);
+        
       }
     }
   } else {
+
     //   JIKA WIFI DISCONNECT
-    onLED();
+    Serial.println("WIFI DISCONECTED BANG!!!");
+
+    if (!isPairing) {
+      onLED();
+    }
+
+    // TESTING
+    checkSavedWifi();
+    
+    Serial.println("MASUK Wifi LEPASS BANG!!!");
+
+    String jam = getClock();
+    // Jika ada jadwal sudah tersimpan
+    if ( (values && savedSize && (millis() - dataMillis > 60000)) || (values && savedSize &&(dataMillis == 0)) ) {
+      dataMillis = millis();
+
+      Serial.println("MASUK VALUE SAVED SIZE Wifi LEPASS BANG!!!");
+      Serial.println(jam);
+      for (int i = 0; i < savedSize; i++) {
+        Serial.print("Nilai DARI ELSE");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.println(values[i]);
+      }
+      
+      // int beforeFeed = ultrasonic();
+      checkTimeAndRotateServo(jam, values, savedSize);
+      checkTimeAndUltrasonic(jam, values, savedSize);
+    }
+
   }
 }
 
