@@ -1,8 +1,8 @@
-#include <Arduino.h>
+#include <Arduino.h> // Arduino_JSON by Arduino
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h> // Provide the token generation process info.
-#include <ArduinoJson.h>
+#include <ArduinoJson.h> 
 #include <ESP32Servo.h>
 #include <time.h>
 #include <Preferences.h>
@@ -362,7 +362,8 @@ int ultrasonic() {
     // timeRetry = "";
   }
 
-
+  Serial.print("distamce: ");
+  Serial.print(distance);
   int tankPercentage;
 
   // Hitung persentase berdasarkan jarak relatif terhadap range 30mm - 190mm
@@ -807,7 +808,7 @@ void loop() {
         if (!ultrasonicRetry) {
           Serial.println("RETRY BERHASIL");
           Serial.println("ultrasonic RETRY");
-          // updateDocumentUltrasonic(nilaiUltraRetry, waktuTimeRetry);
+          updateDocumentUltrasonic(nilaiUltraRetry, waktuTimeRetry);
           Serial.println(nilaiUltraRetry);
           Serial.println("waktu RETRY");
           Serial.println(waktuTimeRetry);
